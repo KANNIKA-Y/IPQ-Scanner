@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>สแกน QR / Barcode | IPQ Platform</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    body { margin:0; font-family: system-ui, sans-serif; background:#0f172a; color:#fff; text-align:center; }
+    header { padding:14px; font-weight:700; background:#0f766e; }
+    #qr-reader { width:100%; max-width:480px; margin:16px auto; }
+    #msg { padding:8px 16px; font-size:14px; color:#cbd5e1; }
+    button { padding:10px 20px; border:0; border-radius:8px; background:#e2e8f0; font-size:14px; margin:8px; }
+  </style>
+</head>
+<body>
+  <header>สแกน QR Code / Barcode — Accession No.</header>
+  <div id="qr-reader"></div>
+  <div id="msg">กำลังเปิดกล้อง… กรุณากด "อนุญาต" เมื่อเบราว์เซอร์ถาม</div>
+  <button onclick="goBack('')">ยกเลิก / กลับ</button>
+
+  <script>
+    var params = new URLSearchParams(location.search);
+    var returnUrl = params.get('return') || '';
+
+    function goBack(code) {
+      if (!returnUrl) { document.getElementById('msg').textContent = 'ผลสแกน: ' + code; return; }
+      var u = returnUrl + (returnUrl.indexOf('?') >= 0 ? '&' : '?') + (code ? 'accession=' + encodeURIComponent(code) : '');
+      location.href = u;
+    }
+
+    var scanner = new Html5Qrcode('qr-reader');
+    var done = false;
+    scanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 240, height: 240 } },
+      function (text) {
+        if (done) return;
+        done = true;
+        scanner.stop().catch(function(){}).then(function () { goBack(String(text).trim()); });
+      },
+      function () {}
+    ).catch(function (err) {
+      document.getElementById('msg').textContent = 'เปิดกล้องไม่ได้: ' + (err && err.name ? err.name : err) +
+        ' — ตรวจสอบสิทธิ์กล้องของเบราว์เซอร์ และต้องเปิดผ่าน HTTPS';
+    });
+  </script>
+</body>
+</html>
