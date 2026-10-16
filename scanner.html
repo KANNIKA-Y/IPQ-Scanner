@@ -29,11 +29,20 @@
       location.href = u;
     }
 
-    var scanner = new Html5Qrcode('qr-reader');
+    var F = Html5QrcodeSupportedFormats;
+    var scanner = new Html5Qrcode('qr-reader', {
+      formatsToSupport: [F.DATA_MATRIX, F.QR_CODE, F.CODE_128, F.CODE_39, F.EAN_13, F.EAN_8, F.ITF, F.PDF_417, F.AZTEC],
+      useBarCodeDetectorIfSupported: true,
+      verbose: false
+    });
     var done = false;
     scanner.start(
       { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 240, height: 240 } },
+      {
+        fps: 15,
+        qrbox: function (w, h) { var s = Math.floor(Math.min(w, h) * 0.8); return { width: s, height: s }; },
+        videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, focusMode: 'continuous' }
+      },
       function (text) {
         if (done) return;
         done = true;
