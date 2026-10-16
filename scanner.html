@@ -3,56 +3,122 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>สแกน QR / Barcode | IPQ Platform</title>
-  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <title>สแกน QR / Data Matrix | IPQ Platform</title>
+  <!-- zxing-wasm (ZXing-C++): รองรับ Data Matrix ได้ดีกว่า html5-qrcode -->
+  <script src="https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.5/dist/iife/reader/index.js"></script>
   <style>
     body { margin:0; font-family: system-ui, sans-serif; background:#0f172a; color:#fff; text-align:center; }
     header { padding:14px; font-weight:700; background:#0f766e; }
-    #qr-reader { width:100%; max-width:480px; margin:16px auto; }
-    #msg { padding:8px 16px; font-size:14px; color:#cbd5e1; }
-    button { padding:10px 20px; border:0; border-radius:8px; background:#e2e8f0; font-size:14px; margin:8px; }
+    #wrap { position:relative; width:100%; max-width:520px; margin:12px auto; background:#000; }
+    video { width:100%; display:block; }
+    #box { position:absolute; left:10%; top:15%; width:80%; height:70%; border:2px solid #2dd4bf; border-radius:10px; box-shadow:0 0 0 9999px rgba(0,0,0,.35); pointer-events:none; }
+    #msg { padding:8px 16px; font-size:14px; color:#cbd5e1; min-height:20px; }
+    button, label.btn { display:inline-block; padding:10px 18px; border:0; border-radius:8px; background:#e2e8f0; color:#0f172a; font-size:14px; margin:6px; cursor:pointer; }
+    input[type=file] { display:none; }
   </style>
 </head>
 <body>
-  <header>สแกน QR Code / Barcode — Accession No.</header>
-  <div id="qr-reader"></div>
+  <header>สแกน QR Code / Data Matrix — Accession No.</header>
+  <div id="wrap"><video id="v" playsinline muted autoplay></video><div id="box"></div></div>
   <div id="msg">กำลังเปิดกล้อง… กรุณากด "อนุญาต" เมื่อเบราว์เซอร์ถาม</div>
-  <button onclick="goBack('')">ยกเลิก / กลับ</button>
+  <div>
+    <button id="torch" style="display:none" onclick="toggleTorch()">💡 เปิดไฟฉาย</button>
+    <label class="btn">📷 ถ่ายรูปแล้วอ่าน<input type="file" accept="image/*" capture="environment" onchange="fromFile(this)"></label>
+    <button onclick="goBack('')">ยกเลิก / กลับ</button>
+  </div>
 
   <script>
     var params = new URLSearchParams(location.search);
     var returnUrl = params.get('return') || '';
+    var msg = document.getElementById('msg');
+    var video = document.getElementById('v');
+    var FORMATS = ['DataMatrix', 'QRCode', 'Code128', 'Code39', 'EAN-13', 'EAN-8', 'ITF', 'PDF417', 'Aztec'];
+    var OPTS = { formats: FORMATS, tryHarder: true, tryInvert: true, tryRotate: true, tryDownscale: true, maxNumberOfSymbols: 1 };
+    var stream = null, track = null, done = false, torchOn = false, busy = false;
 
     function goBack(code) {
-      if (!returnUrl) { document.getElementById('msg').textContent = 'ผลสแกน: ' + code; return; }
-      var u = returnUrl + (returnUrl.indexOf('?') >= 0 ? '&' : '?') + (code ? 'accession=' + encodeURIComponent(code) : '');
-      location.href = u;
+      if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+      if (!returnUrl) { msg.textContent = 'ผลสแกน: ' + code; return; }
+      location.href = returnUrl + (returnUrl.indexOf('?') >= 0 ? '&' : '?') + (code ? 'accession=' + encodeURIComponent(code) : '');
     }
 
-    var F = Html5QrcodeSupportedFormats;
-    var scanner = new Html5Qrcode('qr-reader', {
-      formatsToSupport: [F.DATA_MATRIX, F.QR_CODE, F.CODE_128, F.CODE_39, F.EAN_13, F.EAN_8, F.ITF, F.PDF_417, F.AZTEC],
-      useBarCodeDetectorIfSupported: true,
-      verbose: false
-    });
-    var done = false;
-    scanner.start(
-      { facingMode: 'environment' },
-      {
-        fps: 15,
-        qrbox: function (w, h) { var s = Math.floor(Math.min(w, h) * 0.8); return { width: s, height: s }; },
-        videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, focusMode: 'continuous' }
-      },
-      function (text) {
-        if (done) return;
-        done = true;
-        scanner.stop().catch(function(){}).then(function () { goBack(String(text).trim()); });
-      },
-      function () {}
-    ).catch(function (err) {
-      document.getElementById('msg').textContent = 'เปิดกล้องไม่ได้: ' + (err && err.name ? err.name : err) +
-        ' — ตรวจสอบสิทธิ์กล้องของเบราว์เซอร์ และต้องเปิดผ่าน HTTPS';
-    });
+    // Data Matrix บนสไลด์/cassette เก็บข้อมูลแบบ  A#01#ST24-00075#640002464-02
+    // → ดึงเฉพาะส่วน Accession No. (เช่น ST24-00075) ถ้าไม่พบรูปแบบนี้ใช้ข้อความทั้งหมด
+    function extractAccession(text) {
+      var t = String(text).trim();
+      var parts = t.split('#');
+      for (var i = 0; i < parts.length; i++) {
+        if (/^[A-Za-z]{1,3}\d{2}-\d{3,7}$/.test(parts[i].trim())) return parts[i].trim();
+      }
+      return t;
+    }
+
+    function found(text) {
+      if (done) return;
+      done = true;
+      var acc = extractAccession(text);
+      msg.textContent = 'อ่านได้: ' + acc;
+      goBack(acc);
+    }
+
+    async function toggleTorch() {
+      try {
+        torchOn = !torchOn;
+        await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+        document.getElementById('torch').textContent = torchOn ? '💡 ปิดไฟฉาย' : '💡 เปิดไฟฉาย';
+      } catch (e) { msg.textContent = 'เครื่องนี้ไม่รองรับไฟฉาย'; }
+    }
+
+    async function fromFile(inp) {
+      var f = inp.files && inp.files[0];
+      if (!f) return;
+      msg.textContent = 'กำลังอ่านรูป…';
+      try {
+        var res = await ZXingWASM.readBarcodes(f, OPTS);
+        if (res.length && res[0].text) return found(res[0].text);
+        msg.textContent = 'อ่านรูปไม่สำเร็จ ลองถ่ายใหม่ให้ใกล้และชัดขึ้น';
+      } catch (e) { msg.textContent = 'ผิดพลาด: ' + e; }
+    }
+
+    var canvas = document.createElement('canvas');
+    var ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    async function tick() {
+      if (done) return;
+      if (!busy && video.videoWidth) {
+        busy = true;
+        try {
+          // ตัดเฉพาะกรอบกลางภาพ (80% x 70%) ที่ความละเอียดเต็ม
+          var sw = video.videoWidth * 0.8, sh = video.videoHeight * 0.7;
+          var sx = video.videoWidth * 0.1, sy = video.videoHeight * 0.15;
+          canvas.width = sw; canvas.height = sh;
+          ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+          var res = await ZXingWASM.readBarcodes(ctx.getImageData(0, 0, sw, sh), OPTS);
+          if (res.length && res[0].text) return found(res[0].text);
+        } catch (e) { console.warn(e); }
+        busy = false;
+      }
+      setTimeout(tick, 120);
+    }
+
+    (async function start() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false
+        });
+        video.srcObject = stream;
+        track = stream.getVideoTracks()[0];
+        try {
+          var caps = track.getCapabilities ? track.getCapabilities() : {};
+          if (caps.focusMode && caps.focusMode.indexOf('continuous') >= 0) await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+          if (caps.torch) document.getElementById('torch').style.display = 'inline-block';
+        } catch (e) {}
+        msg.textContent = 'วางรหัสให้อยู่ในกรอบ ห่างประมาณ 10–15 ซม. ให้ภาพชัด';
+        tick();
+      } catch (err) {
+        msg.textContent = 'เปิดกล้องไม่ได้: ' + (err && err.name ? err.name : err) + ' — ตรวจสอบสิทธิ์กล้อง หรือใช้ปุ่ม "ถ่ายรูปแล้วอ่าน"';
+      }
+    })();
   </script>
 </body>
 </html>
